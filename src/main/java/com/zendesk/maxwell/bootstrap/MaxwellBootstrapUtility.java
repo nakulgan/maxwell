@@ -34,6 +34,8 @@ public class MaxwellBootstrapUtility {
 		}
 
 		ConnectionPool connectionPool = getConnectionPool(config);
+		// Split the config
+		ConnectionPool replicationPool = getReplicationConnectionPool(config);
 		try ( final Connection connection = connectionPool.getConnection() ) {
 			if ( config.abortBootstrapID != null ) {
 				getInsertedRowsCount(connection, config.abortBootstrapID);
@@ -46,15 +48,16 @@ public class MaxwellBootstrapUtility {
 				getInsertedRowsCount(connection, config.monitorBootstrapID);
 				rowId = config.monitorBootstrapID;
 			} else {
-				Long totalRows = calculateRowCount(connection, config.databaseName, config.tableName, config.whereClause);
-				rowId = insertBootstrapStartRow(connection, config.databaseName, config.tableName, config.whereClause, config.clientID, totalRows);
-			}
+				try ( final Connection replication = replicationPool.getConnection()) {
+					Long totalRows = calculateRowCount(replication, config.databaseName, config.tableName, config.whereClause);
+					rowId = insertBootstrapStartRow(connection, config.databaseName, config.tableName, config.whereClause, config.clientID, totalRows);
+					monitorProgress(connection, rowId);
+				} catch (Exception e) {
+					LOGGER.error("Replicaiton Connection error");
+					LOGGER.error(e.toString());
+					Runtime.getRuntime().halt(1);
+				}
 
-			try {
-				monitorProgress(connection, rowId);
-			} catch ( MissingBootstrapRowException e ) {
-				LOGGER.error("bootstrap aborted.");
-				Runtime.getRuntime().halt(1);
 			}
 
 		} catch ( SQLException e ) {
@@ -137,6 +140,17 @@ public class MaxwellBootstrapUtility {
 		int idleTimeout = 10;
 		String connectionURI = config.getConnectionURI();
 		return new ConnectionPool(name, maxPool, maxSize, idleTimeout, connectionURI, config.mysql.user, config.mysql.password);
+	}
+
+	private ConnectionPool getReplicationConnectionPool(MaxwellBootstrapUtilityConfig config) {
+		String name = "MaxwellBootstrapReplicationConnectionPool";
+		int maxPool = 10;
+		int maxSize = 0;
+		int idleTimeout = 10;
+		String connectionURI = config.getReplicationConnectionURI();
+		String user = config.replicationMySql.user;
+		String password = config.replicationMySql.password;
+		return new ConnectionPool(name, maxPool, maxSize, idleTimeout, connectionURI, user, password);
 	}
 
 	private Long getTotalRowCount(Connection connection, Long bootstrapRowID) throws SQLException, MissingBootstrapRowException {
